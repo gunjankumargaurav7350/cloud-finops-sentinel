@@ -1,0 +1,36 @@
+{
+  "mode": "Indexed",
+  "policyRule": {
+    "if": {
+      "allOf": [
+        {
+          "field": "type",
+          "notIn": [
+            "Microsoft.Resources/subscriptions",
+            "Microsoft.Resources/resourceGroups"
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "field": "tags['CostCenter']",
+              "exists": "false"
+            },
+            {
+              "field": "tags['Environment']",
+              "exists": "false"
+            },
+            {
+              "field": "tags['Owner']",
+              "exists": "false"
+            }
+          ]
+        }
+      ]
+    },
+    "then": {
+      "effect": "deny"
+    }
+  },
+  "parameters": {}
+}

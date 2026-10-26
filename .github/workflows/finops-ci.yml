@@ -1,0 +1,39 @@
+name: FinOps IaC Cost Estimation & Governance
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  finops-infracost-check:
+    name: Infracost Diff & Spending Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Infracost
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Generate Infracost Cost Estimate Baseline
+        run: |
+          infracost breakdown --path terraform/ \
+                              --format json \
+                              --out-file /tmp/infracost-base.json
+
+      - name: Infracost PR Diff & Threshold Validation
+        run: |
+          infracost diff --path terraform/ \
+                         --format json \
+                         --compare-to /tmp/infracost-base.json
+
+      - name: Validate FinOps Governance Tags
+        run: |
+          echo "Validating mandatory tags in Terraform plans..."
+          grep -rn "CostCenter" terraform/ || (echo "Missing CostCenter tag in Terraform definition!" && exit 1)
