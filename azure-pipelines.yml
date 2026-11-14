@@ -1,14 +1,7 @@
-# ==============================================================================
-# Enterprise Azure DevOps Pipeline - cloud-finops-sentinel
-# Author: Gunjan Kumar Gaurav (Senior Cloud & DevSecOps Consultant)
-# Architecture: Multi-Stage, Shift-Left Security Gates, Terraform IaC Validation
-# ==============================================================================
-
 trigger:
   branches:
     include:
       - main
-      - releases/*
   paths:
     include:
       - terraform/**
@@ -23,81 +16,43 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  - name: terraformVersion
-    value: '1.9.5'
-  - name: azureServiceConnection
-    value: 'sc-azure-devops-prod'
-  - name: tfWorkingDir
-    value: '$(System.DefaultWorkingDirectory)/terraform'
+  tf_version: '1.9.5'
+  tf_dir: '$(System.DefaultWorkingDirectory)/terraform'
 
 stages:
-# ------------------------------------------------------------------------------
-# STAGE 1: Linting, Syntax Validation & Static Analysis
-# ------------------------------------------------------------------------------
-- stage: Lint_And_Validate
-  displayName: '🔍 Stage 1: Lint & Static Analysis'
-  jobs:
-  - job: Terraform_Validation
-    displayName: 'Terraform Format & Validate'
-    steps:
-    - task: TerraformInstaller@1
-      displayName: 'Install Terraform v$(terraformVersion)'
-      inputs:
-        terraformVersion: '$(terraformVersion)'
+  - stage: validate
+    displayName: Validate
+    jobs:
+      - job: tf_validate
+        displayName: Terraform Validate
+        steps:
+          - task: TerraformInstaller@1
+            inputs:
+              terraformVersion: $(tf_version)
 
-    - script: |
-        echo "Running terraform fmt check..."
-        terraform fmt -check -recursive $(tfWorkingDir)
-      displayName: 'Terraform Format Check'
+          - script: |
+              terraform fmt -check -recursive $(tf_dir)
+              terraform -chdir=$(tf_dir) init -backend=false
+              terraform -chdir=$(tf_dir) validate
+            displayName: Format and Validate
 
-    - script: |
-        echo "Initializing Terraform without backend..."
-        terraform -chdir=$(tfWorkingDir) init -backend=false
-        echo "Validating Terraform configuration..."
-        terraform -chdir=$(tfWorkingDir) validate
-      displayName: 'Terraform Init & Validate'
+  - stage: security
+    displayName: Security Scan
+    dependsOn: validate
+    jobs:
+      - job: security_scan
+        displayName: Checkov & Trivy
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.11'
 
-# ------------------------------------------------------------------------------
-# STAGE 2: Security & Compliance Gates (Checkov, Trivy, TruffleHog)
-# ------------------------------------------------------------------------------
-- stage: Security_Gates
-  displayName: '🛡️ Stage 2: DevSecOps Security Gates'
-  dependsOn: Lint_And_Validate
-  jobs:
-  - job: Security_Scanning
-    displayName: 'Checkov & Secret Scanning'
-    steps:
-    - task: UsePythonVersion@0
-      inputs:
-        versionSpec: '3.11'
-      displayName: 'Setup Python for Checkov'
+          - script: |
+              pip install --upgrade pip checkov
+              checkov -d $(tf_dir) --framework terraform --soft-fail
+            displayName: Checkov Scan
 
-    - script: |
-        pip install --upgrade pip checkov
-        echo "Running Checkov IaC Security Gate..."
-        checkov -d $(tfWorkingDir) --framework terraform --soft-fail
-      displayName: 'Run Checkov Security Scan'
-
-    - script: |
-        curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-        trivy config $(tfWorkingDir) --exit-code 0
-      displayName: 'Run Trivy IaC Configuration Scan'
-
-# ------------------------------------------------------------------------------
-# STAGE 3: Dry-Run Plan & Compliance Review
-# ------------------------------------------------------------------------------
-- stage: Terraform_Plan
-  displayName: '📋 Stage 3: Speculative Plan & Review'
-  dependsOn: Security_Gates
-  jobs:
-  - job: Plan
-    displayName: 'Terraform Plan Dry-Run'
-    steps:
-    - task: TerraformInstaller@1
-      inputs:
-        terraformVersion: '$(terraformVersion)'
-
-    - script: |
-        terraform -chdir=$(tfWorkingDir) init -backend=false
-        echo "Terraform configuration is structurally verified and ready for deployment."
-      displayName: 'Terraform Plan Verification'
+          - script: |
+              curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+              trivy config $(tf_dir) --exit-code 0
+            displayName: Trivy Scan
