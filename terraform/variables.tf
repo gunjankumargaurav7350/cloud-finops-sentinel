@@ -16,66 +16,69 @@ variable "environment" {
   default     = "prod"
 }
 
-variable "storage_account_name" {
-  description = "Unique storage account name for FinOps function app"
-  type        = string
-  default     = "stfinopssentinelprod01"
-}
-
-variable "primary_subscription_id" {
-  description = "Azure Subscription ID for enterprise consumption budget monitoring"
-  type        = string
-  default     = "00000000-0000-0000-0000-000000000000"
-}
-
-variable "target_subscription_ids" {
-  description = "List of subscriptions to scan for orphaned resources and waste"
-  type        = list(string)
-  default     = ["00000000-0000-0000-0000-000000000000"]
-}
-
-variable "monthly_budget_amount" {
-  description = "Monthly spending threshold in subscription currency"
+variable "log_retention_days" {
+  description = "Log Analytics retention period in days"
   type        = number
-  default     = 25000
+  default     = 30
 }
 
-variable "budget_thresholds" {
-  description = "Dynamic list of budget notification trigger thresholds"
-  type = list(object({
-    percent = number
-    type    = string
+variable "daily_log_quota_gb" {
+  description = "Daily telemetry ingestion quota in GB"
+  type        = number
+  default     = 5
+}
+
+variable "finops_engines" {
+  type = map(object({
+    storage_account_name    = string
+    auto_purge_enabled      = optional(bool, false)
+    snapshot_retention_days = optional(number, 90)
+    alert_webhook_url       = optional(string, "https://outlook.office.com/webhook/sample-finops-webhook")
+    target_subscription_ids = optional(list(string), ["00000000-0000-0000-0000-000000000000"])
+    tags                    = optional(map(string), {})
   }))
-  default = [
-    { percent = 50.0, type = "Actual" },
-    { percent = 75.0, type = "Actual" },
-    { percent = 90.0, type = "Actual" },
-    { percent = 100.0, type = "Forecasted" }
-  ]
+  description = "FinOps waste-collector Function App engines instantiated via for_each"
+  default = {
+    "prod" = {
+      storage_account_name    = "stfinopssentinelprod01"
+      auto_purge_enabled      = false
+      snapshot_retention_days = 90
+      alert_webhook_url       = "https://outlook.office.com/webhook/sample-finops-webhook"
+      target_subscription_ids = ["00000000-0000-0000-0000-000000000000"]
+    }
+  }
 }
 
-variable "finops_stakeholder_emails" {
-  description = "Email distribution list for financial alerts"
-  type        = list(string)
-  default     = ["gunjankumargaurav7@gmail.com", "cloud-governance@company.com"]
-}
-
-variable "auto_purge_enabled" {
-  description = "If true, automatically deletes orphaned disks and unattached public IPs after grace period"
-  type        = bool
-  default     = false
-}
-
-variable "snapshot_retention_days" {
-  description = "Maximum age in days before orphaned disk snapshots are flagged or purged"
-  type        = number
-  default     = 90
-}
-
-variable "alert_webhook_url" {
-  description = "Slack or Microsoft Teams webhook URL for FinOps notifications"
-  type        = string
-  default     = "https://outlook.office.com/webhook/sample-finops-webhook"
+variable "budgets" {
+  type = map(object({
+    subscription_id = string
+    amount          = number
+    time_grain      = optional(string, "Monthly")
+    start_date      = optional(string, "2026-11-01T00:00:00Z")
+    contact_emails  = list(string)
+    contact_roles   = optional(list(string), ["Owner", "Contributor"])
+    notifications = list(object({
+      percent = number
+      type    = string
+    }))
+  }))
+  description = "Enterprise consumption budgets with alerts managed via for_each"
+  default = {
+    "budget-enterprise-cloud-prod" = {
+      subscription_id = "00000000-0000-0000-0000-000000000000"
+      amount          = 25000
+      time_grain      = "Monthly"
+      start_date      = "2026-11-01T00:00:00Z"
+      contact_emails  = ["gunjankumargaurav7@gmail.com", "cloud-governance@company.com"]
+      contact_roles   = ["Owner", "Contributor"]
+      notifications = [
+        { percent = 50.0, type = "Actual" },
+        { percent = 75.0, type = "Actual" },
+        { percent = 90.0, type = "Actual" },
+        { percent = 100.0, type = "Forecasted" }
+      ]
+    }
+  }
 }
 
 variable "default_tags" {

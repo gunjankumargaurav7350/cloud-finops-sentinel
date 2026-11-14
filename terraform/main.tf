@@ -13,7 +13,7 @@ provider "azurerm" {
 }
 
 # -------------------------------------------------------------------------------------------------
-# FinOps Management Resource Group & Storage
+# FinOps Management Resource Group
 # -------------------------------------------------------------------------------------------------
 resource "azurerm_resource_group" "finops" {
   name     = var.resource_group_name
@@ -21,109 +21,43 @@ resource "azurerm_resource_group" "finops" {
   tags     = merge(var.default_tags, { "Workload" = "FinOps-Automation" })
 }
 
-resource "azurerm_storage_account" "finops_storage" {
-  name                     = var.storage_account_name
-  resource_group_name      = azurerm_resource_group.finops.name
-  location                 = azurerm_resource_group.finops.location
-  account_tier             = "Standard"
-  account_replication_type = "LRS"
-  min_tls_version          = "TLS1_2"
-  enable_https_traffic_only = true
-
-  tags = var.default_tags
-}
-
 # -------------------------------------------------------------------------------------------------
-# Serverless FinOps Waste Elimination Function App
+# Module: FinOps Observability & Telemetry Cap
 # -------------------------------------------------------------------------------------------------
-resource "azurerm_service_plan" "consumption" {
-  name                = "asp-finops-sentinel-${var.environment}"
+module "finops_monitoring" {
+  source = "./modules/finops_monitoring"
+
   resource_group_name = azurerm_resource_group.finops.name
   location            = azurerm_resource_group.finops.location
-  os_type             = "Linux"
-  sku_name            = "Y1"
-  tags                = var.default_tags
-}
-
-resource "azurerm_linux_function_app" "finops_engine" {
-  name                       = "func-finops-sentinel-${var.environment}"
-  resource_group_name        = azurerm_resource_group.finops.name
-  location                   = azurerm_resource_group.finops.location
-  storage_account_name       = azurerm_storage_account.finops_storage.name
-  storage_account_access_key = azurerm_storage_account.finops_storage.primary_access_key
-  service_plan_id            = azurerm_service_plan.consumption.id
-
-  identity {
-    type = "SystemAssigned"
-  }
-
-  site_config {
-    application_stack {
-      python_version = "3.11"
-    }
-    cors {
-      allowed_origins = ["https://portal.azure.com"]
-    }
-  }
-
-  app_settings = {
-    "FUNCTIONS_WORKER_RUNTIME"       = "python"
-    "AUTO_PURGE_ENABLED"             = var.auto_purge_enabled ? "true" : "false"
-    "RETENTION_DAYS_SNAPSHOT"        = tostring(var.snapshot_retention_days)
-    "ALERT_WEBHOOK_URL"              = var.alert_webhook_url
-    "SUBSCRIPTION_IDS"               = join(",", var.target_subscription_ids)
-    "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.finops_insights.connection_string
-  }
-
-  tags = var.default_tags
-}
-
-# -------------------------------------------------------------------------------------------------
-# Application Insights & Log Analytics Telemetry Optimization
-# -------------------------------------------------------------------------------------------------
-resource "azurerm_log_analytics_workspace" "finops_law" {
-  name                = "law-finops-telemetry-${var.environment}"
-  resource_group_name = azurerm_resource_group.finops.name
-  location            = azurerm_resource_group.finops.location
-  sku                 = "PerGB2018"
-  retention_in_days   = 30
-  daily_quota_gb      = 5 # Telemetry cap preventing runaway log ingestion costs
-
-  tags = var.default_tags
-}
-
-resource "azurerm_application_insights" "finops_insights" {
-  name                = "appi-finops-${var.environment}"
-  resource_group_name = azurerm_resource_group.finops.name
-  location            = azurerm_resource_group.finops.location
-  workspace_id        = azurerm_log_analytics_workspace.finops_law.id
-  application_type    = "web"
+  environment         = var.environment
+  retention_in_days   = var.log_retention_days
+  daily_quota_gb      = var.daily_log_quota_gb
   tags                = var.default_tags
 }
 
 # -------------------------------------------------------------------------------------------------
-# Azure Consumption Enterprise Budgets & Dynamic Anomaly Alerts
+# Module: FinOps Automation Engines using for_each
 # -------------------------------------------------------------------------------------------------
-resource "azurerm_consumption_budget_subscription" "enterprise_budget" {
-  name            = "budget-enterprise-cloud-${var.environment}"
-  subscription_id = "/subscriptions/${var.primary_subscription_id}"
-  amount          = var.monthly_budget_amount
-  time_grain      = "Monthly"
+module "finops_engine" {
+  source   = "./modules/finops_engine"
+  for_each = var.finops_engines
 
-  time_period {
-    start_date = "2026-11-01T00:00:00Z"
-  }
+  resource_group_name                    = azurerm_resource_group.finops.name
+  location                               = azurerm_resource_group.finops.location
+  environment                            = each.key
+  storage_account_name                   = each.value.storage_account_name
+  auto_purge_enabled                     = each.value.auto_purge_enabled
+  snapshot_retention_days                = each.value.snapshot_retention_days
+  alert_webhook_url                      = each.value.alert_webhook_url
+  target_subscription_ids                = each.value.target_subscription_ids
+  application_insights_connection_string = module.finops_monitoring.application_insights_connection_string
+  tags                                   = merge(var.default_tags, each.value.tags)
+}
 
-  dynamic "notification" {
-    for_each = var.budget_thresholds
-    content {
-      enabled        = true
-      threshold      = notification.value.percent
-      operator       = "GreaterThan"
-      threshold_type = notification.value.type
-
-      contact_emails = var.finops_stakeholder_emails
-      contact_roles  = ["Owner", "Contributor"]
-    }
-  }
+# -------------------------------------------------------------------------------------------------
+# Module: Enterprise Consumption Budgets using for_each
+# -------------------------------------------------------------------------------------------------
+module "consumption_budgets" {
+  source  = "./modules/consumption_budgets"
+  budgets = var.budgets
 }
